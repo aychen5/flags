@@ -298,7 +298,7 @@ def resolve_click(out, markers_df):
 # -----------------------------
 # Data loading
 # -----------------------------
-census_tracts = gpd.read_file(f"{DEFAULT_DATA_PATH}2020 Census Tracts_20250901.geojson")
+census_tracts = gpd.read_file(f"{DEFAULT_DATA_PATH}2020_Census_Tracts_20250901.geojson")
 census_geo_df = gpd.read_file(f"{DEFAULT_DATA_PATH}census_geo_df.geojson")
 detected_flags_tracts_geo = gpd.read_file(f"{DEFAULT_DATA_PATH}detected_flags_tracts_geo.geojson")
 clean_voter_ed_df = gpd.read_file(f"{DEFAULT_DATA_PATH}nyc_voter_data.geojson")
