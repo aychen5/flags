@@ -16,7 +16,7 @@ from folium.plugins import Fullscreen
 import altair as alt
 from branca.colormap import linear, LinearColormap
 from streamlit_folium import st_folium
-import mapillary.interface as mly
+#import mapillary.interface as mly
 #%%
 # -----------------------------
 # Configuration
@@ -49,7 +49,7 @@ BINS = list(np.linspace(0, 100, 6))  # 0,20,40,60,80,100
 PALETTE = 'YlGnBu'      
 
 dotenv.load_dotenv(".env")
-mly.set_access_token(os.getenv("MLY_KEY"))
+#mly.set_access_token(os.getenv("MLY_KEY"))
 #%%
 # -----------------------------
 # Utilities
@@ -60,7 +60,8 @@ def mapillary_thumb_from_id(pid: str, res: int = 1024) -> str | None:
     s = str(pid).strip()                     
     try:
         # Mapillary photo key -> short-lived thumbnail URL
-        return mly.image_thumbnail(image_id=s, resolution=res)
+        #return mly.image_thumbnail(image_id=s, resolution=res)
+        return f"https://images.mapillary.com/{s}/thumb-{res}.jpg" if s else None
     except Exception:
         return None
 
