@@ -37,7 +37,8 @@ st.sidebar.write(
 #     </style>
 # """, unsafe_allow_html=True)
 
-DEFAULT_DATA_PATH = "C:/Users/ANNIE CHEN/Box Sync/Personal/flags/"
+#DEFAULT_DATA_PATH = "C:/Users/ANNIE CHEN/Box Sync/Personal/flags/"
+DEFAULT_DATA_PATH = "https://storage.googleapis.com/streamlit-app-data/"
 MAX_POPUPS = 3000               # max markers that get image popups (to avoid huge HTML)
 THUMBNAIL_MAX_W = 320           # px
 THUMBNAIL_MAX_H = 240           # px
@@ -300,7 +301,7 @@ def resolve_click(out, markers_df):
 census_tracts = gpd.read_file(f"{DEFAULT_DATA_PATH}2020 Census Tracts_20250901.geojson")
 census_geo_df = gpd.read_file(f"{DEFAULT_DATA_PATH}census_geo_df.geojson")
 detected_flags_tracts_geo = gpd.read_file(f"{DEFAULT_DATA_PATH}detected_flags_tracts_geo.geojson")
-clean_voter_ed_df = gpd.read_file(f"{DEFAULT_DATA_PATH}voter_data/nyc_voter_data.geojson")
+clean_voter_ed_df = gpd.read_file(f"{DEFAULT_DATA_PATH}nyc_voter_data.geojson")
 
 # Cache a tiny copy + spatial index
 if "tract_gdf" not in st.session_state:
