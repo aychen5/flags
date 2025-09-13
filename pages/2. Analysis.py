@@ -1,16 +1,11 @@
 #%%
-import streamlit as st
 import pandas as pd
 import geopandas as gpd
 import numpy as np
-
-import os, re, json
 import dotenv
 from itertools import chain
-from PIL import Image
-
+import tensorflow as tf
 import plotnine
-import mapillary.interface as mly
 #%%
 # -----------------------------
 # Configuration

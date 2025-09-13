@@ -5,6 +5,7 @@ import geopandas as gpd
 import numpy as np
 
 import os, re, json
+import requests
 import html
 import dotenv
 from itertools import chain
@@ -16,7 +17,7 @@ from folium.plugins import Fullscreen
 import altair as alt
 from branca.colormap import linear, LinearColormap
 from streamlit_folium import st_folium
-import mapillary.interface as mly
+#import mapillary.interface as mly
 #%%
 # -----------------------------
 # Configuration
@@ -37,7 +38,8 @@ st.sidebar.write(
 #     </style>
 # """, unsafe_allow_html=True)
 
-DEFAULT_DATA_PATH = "C:/Users/ANNIE CHEN/Box Sync/Personal/flags/"
+#DEFAULT_DATA_PATH = "C:/Users/ANNIE CHEN/Box Sync/Personal/flags/"
+DEFAULT_DATA_PATH = "https://storage.googleapis.com/streamlit-app-data/"
 MAX_POPUPS = 3000               # max markers that get image popups (to avoid huge HTML)
 THUMBNAIL_MAX_W = 320           # px
 THUMBNAIL_MAX_H = 240           # px
@@ -48,25 +50,46 @@ DETECTION_THRESHOLD = 0.85
 BINS = list(np.linspace(0, 100, 6))  # 0,20,40,60,80,100
 PALETTE = 'YlGnBu'      
 
-dotenv.load_dotenv(".env")
-mly.set_access_token(os.getenv("MLY_KEY"))
+dotenv.load_dotenv(".env") 
+# MLY_KEY = os.getenv("MLY_KEY")
+#mly.set_access_token(os.getenv("MLY_KEY"))
 #%%
 # -----------------------------
 # Utilities
 # -----------------------------
+def get_mapillary_token():
+    return (
+        st.secrets.get("MLY_KEY")
+        or os.getenv("MLY_KEY")         
+    )
 
 #@st.cache_data(show_spinner=False)
+MLY_KEY = get_mapillary_token()
 def mapillary_thumb_from_id(pid: str, res: int = 1024) -> str | None:
-    s = str(pid).strip()                     
-    try:
-        # Mapillary photo key -> short-lived thumbnail URL
-        return mly.image_thumbnail(image_id=s, resolution=res)
-    except Exception:
+    s = str(pid).strip()          
+    # was coerced to float like '12345.0', strip the .0
+    if re.match(r"^\d+\.0$", s):
+        return s[:-2]
+    # try:
+    #     # Mapillary photo key -> short-lived thumbnail URL
+    #     #return mly.image_thumbnail(image_id=s, resolution=res)
+    #     return f"https://images.mapillary.com/{s}/thumb-{res}.jpg" if s else None
+    if not pid or not MLY_KEY:
         return None
+    try:
+        header = {'Authorization' : 'OAuth {}'.format(MLY_KEY)}
+        url = 'https://graph.mapillary.com/{}?fields=thumb_1024_url'.format(s)
+        r = requests.get(url, headers=header)
+        data = r.json()
+        image_url = data[f'thumb_{res}_url']
+    except Exception:
+        image_url = None
+    return image_url
 
 def mapillary_viewer_link(pid):
     s = str(pid).strip()
     return s if s.startswith("http") else f"https://www.mapillary.com/app/?pKey={s}&focus=photo"
+
 
 
 def popup_html(row, thumb_url: str | None = None) -> str:
@@ -87,8 +110,7 @@ def popup_html(row, thumb_url: str | None = None) -> str:
     # badges
     score_badge = f"<span style='background:#fee2e2;border:1px solid #fecaca;color:#991b1b;padding:1px 6px;border-radius:999px;font-size:11px;'>score: {score:.2f}</span>" if isinstance(score,(float,int)) else ""
     tract_badge = f"<span style='margin-left:6px;background:#e0e7ff;border:1px solid #c7d2fe;color:#3730a3;padding:1px 6px;border-radius:999px;font-size:11px;'>tract: {html.escape(str(tract))}</span>" if tract else ""
-    time_line   = f"<div style='margin-top:6px;color:#6b7280;font-size:12px'>{when}</div>" if when else ""
-
+    time_badge = f"<span style='margin-left:6px;background:#f1f5f9;border:1px solid #e2e8f0;color:#334155;padding:1px 6px;border-radius:999px;font-size:11px;'>captured: {html.escape(when)}</span>" if when else ""
     thumb_img = f"<img src='{html.escape(thumb_url)}' style='width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid #ddd;'/>" if thumb_url else ""
 
     title = f"Photo {html.escape(pid[-8:] or pid)}"  # short id tail
@@ -101,7 +123,7 @@ def popup_html(row, thumb_url: str | None = None) -> str:
             <div style="flex:1">
             <div style="font-weight:600;font-size:14px">{title}</div>
             <div style="margin-top:4px">{score_badge}{tract_badge}</div>
-            {time_line}
+            <div style="margin-top:4px">{time_badge}</div>
             <div style="margin-top:8px">
                 <a href="{link}" target="_blank" style="text-decoration:none;font-size:12px">Open in Mapillary ↗</a>
             </div>
@@ -217,7 +239,7 @@ def make_census_layer(df, value_col, name, cmap = CENSUS_CMAP):
     )
     folium.GeoJsonPopup(
         fields=["geoid", value_col],
-        aliases=["GEOID", name],
+        aliases=["Tract ID", name],
         labels=False
     ).add_to(layer)
     return layer
@@ -296,13 +318,16 @@ def resolve_click(out, markers_df):
 # -----------------------------
 # Data loading
 # -----------------------------
-census_tracts = gpd.read_file(f"{DEFAULT_DATA_PATH}2020 Census Tracts_20250901.geojson")
+census_tracts = gpd.read_file(f"{DEFAULT_DATA_PATH}2020_Census_Tracts_20250901.geojson")
 census_geo_df = gpd.read_file(f"{DEFAULT_DATA_PATH}census_geo_df.geojson")
 detected_flags_tracts_geo = gpd.read_file(f"{DEFAULT_DATA_PATH}detected_flags_tracts_geo.geojson")
-clean_voter_ed_df = gpd.read_file(f"{DEFAULT_DATA_PATH}voter_data/nyc_voter_data.geojson")
+clean_voter_ed_df = gpd.read_file(f"{DEFAULT_DATA_PATH}nyc_voter_data.geojson")
 
 # Cache a tiny copy + spatial index
 if "tract_gdf" not in st.session_state:
+    # enforce CRS and id type for spatial tests
+    if census_geo_df.crs is None or str(census_geo_df.crs).upper() != "EPSG:4326":
+        census_geo_df = census_geo_df.to_crs(4326)
     st.session_state.tract_gdf = census_geo_df[["geoid", "geometry"]].copy()
     _ = st.session_state.tract_gdf.sindex  # build sindex
 
@@ -372,6 +397,7 @@ folium.GeoJson(
         'weight': 1,
         'dashArray': '5, 5'
     },
+    #pane = "polygons",
     interactive=True,
     tooltip=folium.GeoJsonTooltip(fields=['geoid'], aliases=['TRACT ID'])
 ).add_to(tracts_group)
@@ -463,7 +489,6 @@ add_detection_markers(nyc_map,
 # layer control
 folium.LayerControl(collapsed=False).add_to(nyc_map)
 
-
 # two column layout
 left, right = st.columns([2.3, 1], gap="large")
 
@@ -492,8 +517,8 @@ with right:
         flags_in_tract = markers_df.loc[markers_df["geoid"].astype(str) == str(geoid_cur)]
 
         # Show once (no duplicates)
-        st.markdown(f"**GEOID {geoid_cur}**")
-        st.metric("Detections in tract", int(flags_in_tract.shape[0]))
+        st.metric("Tract ID",  int(geoid_cur) )
+        st.metric("Number of Detections in tract", int(flags_in_tract.shape[0]))
 
         pct_cols_all = [
             'hispanic_alone_pct','white_alone_pct','black_alone_pct','asian_alone_pct',
@@ -535,9 +560,9 @@ with right:
         pid = marker_row.get("properties.id")
         url = mapillary_thumb_from_id(pid, res=1024)
         if url:
-            st.image(url, width='stretch')
+            st.image(url, width="stretch")
             st.caption(f"[Open in Mapillary ↗]({mapillary_viewer_link(pid)})")
         else:
-            st.link_button("Open in Mapillary ↗", mapillary_viewer_link(pid), width='stretch')
+            st.link_button("Open in Mapillary ↗", mapillary_viewer_link(pid), width="stretch")
     else:
         st.caption("Click a flag marker to preview its street view here.")
