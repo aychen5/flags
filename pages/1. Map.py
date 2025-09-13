@@ -517,7 +517,7 @@ with right:
         flags_in_tract = markers_df.loc[markers_df["geoid"].astype(str) == str(geoid_cur)]
 
         # Show once (no duplicates)
-        st.metric("GEOID",  int(geoid_cur) )
+        st.metric("Tract ID",  int(geoid_cur) )
         st.metric("Number of Detections in tract", int(flags_in_tract.shape[0]))
 
         pct_cols_all = [

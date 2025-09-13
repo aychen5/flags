@@ -23,6 +23,10 @@ Flag display is not evenly distributed across the city, but instead reflects bro
 #### Map Tab
 Visualizes the geographic distribution of flag detections across the city. You can zoom into different neighborhoods, compare across boroughs, and see spatial patterns in civic symbolism.
 
+
+![Map view]({(Path(__file__).parent / "static" / "ss_map.png").as_posix()})
+
+
 #### Analysis Tab
 Shows how flag density correlates with neighborhood characteristics such as:
 - Racial and ethnic composition
