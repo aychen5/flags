@@ -112,10 +112,7 @@ def popup_html(row, thumb_url: str | None = None) -> str:
     tract_badge = f"<span style='margin-left:6px;background:#e0e7ff;border:1px solid #c7d2fe;color:#3730a3;padding:1px 6px;border-radius:999px;font-size:11px;'>tract: {html.escape(str(tract))}</span>" if tract else ""
     dt = pd.to_datetime(row.get("datetime"), errors="coerce")
     when = dt.strftime("%Y-%m-%d %H:%M") if pd.notna(dt) else ""
-    time_badge = (
-    f"<span style='margin-left:6px;background:#f1f5f9;border:1px solid #e2e8f0;color:#334155;"
-    f"padding:1px 6px;border-radius:999px;font-size:11px;'>captured: {html.escape(when)}</span>"
-    ) if when else ""
+    time_badge = f"<span style='margin-left:6px;background:#f1f5f9;border:1px solid #e2e8f0;color:#334155;padding:1px 6px;border-radius:999px;font-size:11px;'>captured: {html.escape(when)}</span>" if when else ""
     thumb_img = f"<img src='{html.escape(thumb_url)}' style='width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid #ddd;'/>" if thumb_url else ""
 
     title = f"Photo {html.escape(pid[-8:] or pid)}"  # short id tail
