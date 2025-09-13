@@ -5,6 +5,7 @@ import geopandas as gpd
 import numpy as np
 
 import os, re, json
+import requests
 import html
 import dotenv
 from itertools import chain
@@ -49,22 +50,41 @@ DETECTION_THRESHOLD = 0.85
 BINS = list(np.linspace(0, 100, 6))  # 0,20,40,60,80,100
 PALETTE = 'YlGnBu'      
 
-dotenv.load_dotenv(".env")
+dotenv.load_dotenv(".env") 
+# MLY_KEY = os.getenv("MLY_KEY")
 #mly.set_access_token(os.getenv("MLY_KEY"))
 #%%
 # -----------------------------
 # Utilities
 # -----------------------------
+def get_mapillary_token():
+    return (
+        st.secrets.get("MLY_KEY")
+        or os.getenv("MLY_KEY")         
+    )
 
 #@st.cache_data(show_spinner=False)
+MLY_KEY = get_mapillary_token()
 def mapillary_thumb_from_id(pid: str, res: int = 1024) -> str | None:
-    s = str(pid).strip()                     
-    try:
-        # Mapillary photo key -> short-lived thumbnail URL
-        #return mly.image_thumbnail(image_id=s, resolution=res)
-        return f"https://images.mapillary.com/{s}/thumb-{res}.jpg" if s else None
-    except Exception:
+    s = str(pid).strip()          
+    # was coerced to float like '12345.0', strip the .0
+    if re.match(r"^\d+\.0$", s):
+        return s[:-2]
+    # try:
+    #     # Mapillary photo key -> short-lived thumbnail URL
+    #     #return mly.image_thumbnail(image_id=s, resolution=res)
+    #     return f"https://images.mapillary.com/{s}/thumb-{res}.jpg" if s else None
+    if not pid or not MLY_KEY:
         return None
+    try:
+        header = {'Authorization' : 'OAuth {}'.format(MLY_KEY)}
+        url = 'https://graph.mapillary.com/{}?fields=thumb_1024_url'.format(s)
+        r = requests.get(url, headers=header)
+        data = r.json()
+        image_url = data[f'thumb_{res}_url']
+    except Exception:
+        image_url = None
+    return image_url
 
 def mapillary_viewer_link(pid):
     s = str(pid).strip()
@@ -305,6 +325,9 @@ clean_voter_ed_df = gpd.read_file(f"{DEFAULT_DATA_PATH}nyc_voter_data.geojson")
 
 # Cache a tiny copy + spatial index
 if "tract_gdf" not in st.session_state:
+    # enforce CRS and id type for spatial tests
+    if census_geo_df.crs is None or str(census_geo_df.crs).upper() != "EPSG:4326":
+        census_geo_df = census_geo_df.to_crs(4326)
     st.session_state.tract_gdf = census_geo_df[["geoid", "geometry"]].copy()
     _ = st.session_state.tract_gdf.sindex  # build sindex
 
@@ -374,6 +397,7 @@ folium.GeoJson(
         'weight': 1,
         'dashArray': '5, 5'
     },
+    #pane = "polygons",
     interactive=True,
     tooltip=folium.GeoJsonTooltip(fields=['geoid'], aliases=['TRACT ID'])
 ).add_to(tracts_group)
@@ -465,7 +489,6 @@ add_detection_markers(nyc_map,
 # layer control
 folium.LayerControl(collapsed=False).add_to(nyc_map)
 
-
 # two column layout
 left, right = st.columns([2.3, 1], gap="large")
 
@@ -537,9 +560,9 @@ with right:
         pid = marker_row.get("properties.id")
         url = mapillary_thumb_from_id(pid, res=1024)
         if url:
-            st.image(url, width='stretch')
+            st.image(url, width="stretch")
             st.caption(f"[Open in Mapillary ↗]({mapillary_viewer_link(pid)})")
         else:
-            st.link_button("Open in Mapillary ↗", mapillary_viewer_link(pid), width='stretch')
+            st.link_button("Open in Mapillary ↗", mapillary_viewer_link(pid), width="stretch")
     else:
         st.caption("Click a flag marker to preview its street view here.")
