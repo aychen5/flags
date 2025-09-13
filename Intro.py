@@ -1,4 +1,5 @@
 import streamlit as st
+from pathlib import Path
 
 st.set_page_config(
     page_title="Flags App",
@@ -22,11 +23,13 @@ Flag display is not evenly distributed across the city, but instead reflects bro
 
 #### Map Tab
 Visualizes the geographic distribution of flag detections across the city. You can zoom into different neighborhoods, compare across boroughs, and see spatial patterns in civic symbolism.
+""")
 
+IMG = Path(__file__).parent / "static" / "ssmap.png"
+st.image(IMG)
 
-![Map view]({(Path(__file__).parent / "static" / "ssmap.png").as_posix()})
-
-
+st.markdown(
+    """
 #### Analysis Tab
 Shows how flag density correlates with neighborhood characteristics such as:
 - Racial and ethnic composition
