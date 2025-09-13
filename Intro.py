@@ -24,7 +24,7 @@ Flag display is not evenly distributed across the city, but instead reflects bro
 Visualizes the geographic distribution of flag detections across the city. You can zoom into different neighborhoods, compare across boroughs, and see spatial patterns in civic symbolism.
 
 
-![Map view]({(Path(__file__).parent / "static" / "ss_map.png").as_posix()})
+![Map view]({(Path(__file__).parent / "static" / "ssmap.png").as_posix()})
 
 
 #### Analysis Tab
