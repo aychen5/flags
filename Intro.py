@@ -26,7 +26,7 @@ Visualizes the geographic distribution of flag detections across the city. You c
 """)
 
 IMG = Path(__file__).parent / "static" / "ssmap.png"
-st.image(IMG)
+st.image(str(IMG) )
 
 st.markdown(
     """
