@@ -4,7 +4,6 @@ import geopandas as gpd
 import numpy as np
 import dotenv
 from itertools import chain
-import tensorflow as tf
 import plotnine
 #%%
 # -----------------------------
