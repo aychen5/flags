@@ -9,16 +9,21 @@ import os, sys
 import dotenv
 from itertools import chain
 from PIL import Image
-from shapely.geometry import Point
+from shapely.geometry import Point, box
+import sklearn
 
 import folium
 from folium.plugins import Fullscreen
 import altair as alt
+import rasterio
 from branca.colormap import linear, LinearColormap
 from streamlit_folium import st_folium
 from utils.map_utils import (
     mapillary_thumb_from_id, add_detection_markers,
-    mapillary_viewer_link, make_census_layer, resolve_click
+    mapillary_viewer_link, make_census_layer, resolve_click,
+    load_footprints_2263, 
+    buildings_near_flag_geojson,
+    _get_lon_lat_from_marker_row
 )
 
 print("CWD:", os.getcwd())
@@ -45,8 +50,8 @@ st.sidebar.write(
     """This map displays all American flags detected in NYC. The detection threshold was set to 0.85."""
 )
 
-#DEFAULT_DATA_PATH = "C:/Users/ANNIE CHEN/Box Sync/Personal/flags/"
-DEFAULT_DATA_PATH = "https://storage.googleapis.com/streamlit-app-data/"
+DEFAULT_DATA_PATH = "C:/Users/ANNIE CHEN/Box Sync/Personal/flags/"
+#DEFAULT_DATA_PATH = "https://storage.googleapis.com/streamlit-app-data/"
 MAX_POPUPS = 3000               # max markers that get image popups (to avoid huge HTML)
 THUMBNAIL_MAX_W = 320           # px
 THUMBNAIL_MAX_H = 240           # px
@@ -68,8 +73,7 @@ dotenv.load_dotenv(".env")
 census_tracts = gpd.read_file(f"{DEFAULT_DATA_PATH}2020_Census_Tracts_20250901.geojson")
 census_geo_df = gpd.read_file(f"{DEFAULT_DATA_PATH}census_geo_df.geojson")
 detected_flags_tracts_geo = gpd.read_file(f"{DEFAULT_DATA_PATH}detected_flags_tracts_geo.geojson")
-clean_voter_ed_df = gpd.read_file(f"{DEFAULT_DATA_PATH}nyc_voter_data.geojson")
-#pluto_shape = gpd.read_file(f'{DEFAULT_DATA_PATH}MapPLUTO.shp')
+#clean_voter_ed_df = gpd.read_file(f"{DEFAULT_DATA_PATH}nyc_voter_data.geojson")
 
 # Cache a tiny copy + spatial index
 if "tract_gdf" not in st.session_state:
@@ -102,22 +106,34 @@ vals = tracts_plot["n_flags"].to_numpy()
 qs = np.quantile(vals, [0, .2, .4, .6, .8, 1.0]) if vals.size and vals.max() > 0 else np.array([0,0,0,0,0,0])
 
 # only active voters
-clean_active_voter_ed_df = clean_voter_ed_df[clean_voter_ed_df.STATUS == "Active"]
+#clean_active_voter_ed_df = clean_voter_ed_df[clean_voter_ed_df.STATUS == "Active"]
 
 # define colormaps
-dem_cmap = LinearColormap(["#f7fbff", "#c6dbef", "#6baed6", "#2171b5"], vmin=0, vmax=100)
-rep_cmap = LinearColormap(["#fff5f0", "#fcbba1", "#fb6a4a", "#cb181d"], vmin=0, vmax=100)
+# dem_cmap = LinearColormap(["#f7fbff", "#c6dbef", "#6baed6", "#2171b5"], vmin=0, vmax=100)
+# rep_cmap = LinearColormap(["#fff5f0", "#fcbba1", "#fb6a4a", "#cb181d"], vmin=0, vmax=100)
 
-# 3) PRECOMPUTE per-feature colors and store as properties
-clean_active_voter_ed_df["fillColor_dem"] = clean_active_voter_ed_df["perc_dem"].apply(lambda v: dem_cmap(v) if np.isfinite(v) else "transparent")
-clean_active_voter_ed_df["fillColor_rep"] = clean_active_voter_ed_df["perc_rep"].apply(lambda v: rep_cmap(v) if np.isfinite(v) else "transparent")
+# # 3) PRECOMPUTE per-feature colors and store as properties
+# clean_active_voter_ed_df["fillColor_dem"] = clean_active_voter_ed_df["perc_dem"].apply(lambda v: dem_cmap(v) if np.isfinite(v) else "transparent")
+# clean_active_voter_ed_df["fillColor_rep"] = clean_active_voter_ed_df["perc_rep"].apply(lambda v: rep_cmap(v) if np.isfinite(v) else "transparent")
 
 #%%
+# Defaults
+if "map_center" not in st.session_state:
+    st.session_state.map_center = [40.7, -74.0]   # NYC_CENTER
+if "map_zoom" not in st.session_state:
+    st.session_state.map_zoom = 10
 
 # --- Base map
-nyc_map = folium.Map(location=[40.7, -74], zoom_start=10, tiles=None)
+# Use persisted view here
+nyc_map = folium.Map(
+    location=st.session_state.map_center,
+    zoom_start=st.session_state.map_zoom,
+    tiles=None
+)
+
+#https://python-visualization.github.io/folium/latest/user_guide/raster_layers/tiles.html
 folium.TileLayer(
-    'CartoDB positron',
+    'CartoDB dark_matter',
     name='Map layers',  
     control=True
 ).add_to(nyc_map)
@@ -135,22 +151,6 @@ tracts_group = folium.FeatureGroup(name="Census Tracts", show=False)
 #dem_group = folium.FeatureGroup(name="EDs — % Democrat", show=False)
 #rep_group = folium.FeatureGroup(name="EDs — % Republican", show=False)
 
-# --- census tracts
-folium.GeoJson(
-    census_geo_df,
-    name='Census Tracts',
-    style_function=lambda feature: {
-        'fillColor': 'transparent',
-        'color': 'darkgray',
-        'weight': 1,
-        'dashArray': '5, 5'
-    },
-    #pane = "polygons",
-    interactive=True,
-    tooltip=folium.GeoJsonTooltip(fields=['geoid'], aliases=['TRACT ID'])
-).add_to(tracts_group)
-tracts_group.add_to(nyc_map)
-
 # --- electoral districts
 # folium.GeoJson(
 #     clean_active_voter_ed_df,
@@ -165,7 +165,6 @@ tracts_group.add_to(nyc_map)
 #     tooltip=folium.GeoJsonTooltip(fields=['ELECTION_DIST'], aliases=['DISTRICT ID'])
 # ).add_to(ed_group)
 # ed_group.add_to(nyc_map)
-
 # folium.GeoJson(
 #     clean_active_voter_ed_df.to_json(),
 #     name="EDs — % Democrat",
@@ -196,38 +195,81 @@ tracts_group.add_to(nyc_map)
 # rep_group.add_to(nyc_map)
 
 # --- num flags density
-# folium.Choropleth(
-#     geo_data=tracts_plot,
-#     name='Number of flags',
-#     data=tracts_plot,
-#     columns=['geoid', 'n_flags'],
-#     key_on='feature.id',
-#     fill_color='YlOrRd',
-#     fill_opacity=0.7,
-#     line_opacity=0.2,
-#     line_color='white', 
-#     line_weight=0,
-#     highlight=False, 
-#     smooth_factor=1.0,
-#     show=True,
-#     #threshold_scale=[100, 250, 500, 1000, 2000],
-#     legend_name= 'Number of flags').add_to(nyc_map)
+nyc_union = census_geo_df.to_crs(2263).unary_union
+nyc_boundary =  gpd.GeoDataFrame(geometry=[nyc_union],  # optional GDF wrapper
+                                crs=census_geo_df.to_crs(2263).crs)
+xmin, ymin, xmax, ymax = nyc_boundary.total_bounds
+cell_size_ft = 400
+x0 = xmin
+x1 = xmax + cell_size_ft  # right edge is last left-edge + cell
+y0 = ymin
+y1 = ymax + cell_size_ft  # top edge is last bottom-edge + cell
+bounds_proj = gpd.GeoSeries([box(x0, y0, x1, y1)], crs=2263).to_crs(4326).total_bounds  # (minx, miny, maxx, maxy)
+folium.raster_layers.ImageOverlay(
+    name="Flag density",
+    image="flag_kde_rgba.png",
+    bounds=[[bounds_proj[1], bounds_proj[0]], [bounds_proj[3], bounds_proj[2]]],
+    opacity=1.0,          # keep 1.0 — transparency now comes from the PNG
+    #interactive=False,
+    cross_origin=False
+).add_to(nyc_map)
+
+# --- census tracts
+folium.GeoJson(
+    census_geo_df,
+    name='Census Tracts',
+    style_function=lambda feature: {
+        'fillColor': 'transparent',
+        'color': 'darkgray',
+        'weight': 1,
+        'dashArray': '5, 5'
+    },
+    #pane = "polygons",
+    interactive=True,
+    tooltip=folium.GeoJsonTooltip(fields=['geoid'], aliases=['TRACT ID'])
+).add_to(tracts_group)
+tracts_group.add_to(nyc_map)
 
 # --- build census 
-census_groups = ['hispanic_alone_pct', 
-                 'white_alone_pct', 
-                 'black_alone_pct'#,
-                 #'amind_asknat_alone_pct', 
-                 #'asian_alone_pct', 
-                 #'hwi_pacisl_alone_pct',
-                 #'other_alone_pct']
-                ]
+# census_groups = ['hispanic_alone_pct', 
+#                  'white_alone_pct', 
+#                  'black_alone_pct'#,
+#                  #'amind_asknat_alone_pct', 
+#                  #'asian_alone_pct', 
+#                  #'hwi_pacisl_alone_pct',
+#                  #'other_alone_pct']
+#                 ]
+# for group in census_groups:
+#     layer = make_census_layer(census_geo_df, group, group.replace("_alone_pct", " %").title())
+#     layer.add_to(nyc_map)
+# # add a single legend at the end
+#CENSUS_CMAP.add_to(nyc_map)
 
-for group in census_groups:
-    layer = make_census_layer(census_geo_df, group, group.replace("_alone_pct", " %").title())
-    layer.add_to(nyc_map)
-# add a single legend at the end
-CENSUS_CMAP.add_to(nyc_map)
+# --- building types
+FP_2263 = load_footprints_2263(
+    pluto_path=f"{DEFAULT_DATA_PATH}pluto/MapPLUTO.shp",
+    footprints_path=f"{DEFAULT_DATA_PATH}BUILDING_view_-5690770882456580009.geojson",
+)
+# --- controls (put before map render so value is available) ---
+radius_ft = st.sidebar.slider("Building search radius (feet)", 50, 1000, 250, step=25)
+
+# Maintain selected flag across reruns
+if "selected_flag_ll" not in st.session_state:
+    st.session_state.selected_flag_ll = None
+
+
+# If a flag was previously selected, add the nearby buildings layer NOW (before st_folium)
+if st.session_state.selected_flag_ll:
+    flon, flat = st.session_state.selected_flag_ll
+    gj, n_blds = buildings_near_flag_geojson(FP_2263, flon, flat, radius_ft=radius_ft, index_key='2025-10-06')
+    folium.GeoJson(
+        gj,
+        name="Nearby buildings",
+        style_function=lambda f: {"color": "#666666", "weight": 1, "fillColor": "#999999", "fillOpacity": 0.2},
+        tooltip=folium.GeoJsonTooltip(fields=[c for c in ["MAPPLUTO_BBL","LandUse","BldgClass"] if c in gj], localize=True),
+    ).add_to(nyc_map)
+    # visualize radius (feet -> meters)
+    folium.Circle(location=[flat, flon], radius=radius_ft * 0.3048, color="#3388ff", weight=1, fill=True, fill_opacity=0.05).add_to(nyc_map)
 
 # --- flag markers
 add_detection_markers(nyc_map, 
@@ -242,10 +284,23 @@ left, right = st.columns([2.3, 1], gap="large")
 
 with left:
     out = st_folium(nyc_map, 
-                    width=None, height=1000, 
+                    width=None, height=800, 
                     returned_objects=['last_clicked', 'last_object_clicked'],
                     key="nyc_map")
-
+    
+    # --- persist view so reruns keep the same map state
+    if out:
+        # center
+        ctr = out.get("center")
+        if ctr and "lat" in ctr and "lng" in ctr:
+            st.session_state.map_center = [ctr["lat"], ctr["lng"]]
+        # zoom
+        z = out.get("zoom")
+        if isinstance(z, (int, float)):
+            st.session_state.map_zoom = int(z)
+        # (optional) bounds if you want them later
+        if out.get("bounds"):
+            st.session_state.map_bounds = out["bounds"]
 
 with right:
     st.subheader("Census Tract Profile", divider=True)
@@ -253,6 +308,18 @@ with right:
     # Use robust lat/lon resolver (no popup parsing)
     geoid_cur = st.session_state.get("selected_geoid")
     geoid_new, marker_row = resolve_click(out, markers_df)
+
+    # If a marker (flag) was clicked, store its lon/lat and rerun to draw buildings
+    flag_ll = _get_lon_lat_from_marker_row(marker_row)
+    if flag_ll and st.session_state.get("selected_flag_ll") != flag_ll:
+            st.session_state.selected_flag_ll = flag_ll
+            st.rerun()
+
+    # Clear button
+    # if st.session_state.selected_flag_ll:
+    #     if st.button("Clear selected flag / buildings"):
+    #         st.session_state.selected_flag_ll = None
+    #         st.rerun()
 
     if geoid_new:
         geoid_cur = geoid_new

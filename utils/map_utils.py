@@ -10,6 +10,7 @@ import dotenv
 from itertools import chain
 from PIL import Image
 from shapely.geometry import Point
+from shapely import wkb
 
 import folium
 from folium.plugins import Fullscreen
@@ -274,3 +275,108 @@ def resolve_click(out, markers_df):
     marker_row = nearest_marker_within(lat, lon, markers_df, max_meters=40.0)
     geoid = geoid_from_latlon(lat, lon)
     return (geoid, marker_row)
+
+
+@st.cache_data(show_spinner=False, ttl=24*3600)
+def load_footprints_2263(pluto_path: str, footprints_path: str) -> gpd.GeoDataFrame:
+    pluto = gpd.read_file(pluto_path)
+    fpts  = gpd.read_file(footprints_path)
+
+    mappluto = pluto[['BBL', 'LandUse', 'BldgClass', 'geometry']].copy()
+    mappluto['BBL'] = (
+        mappluto['BBL'].pipe(gpd.pd.to_numeric, errors="coerce")
+        .dropna().astype("int64").astype(str)
+    )
+    if 'MAPPLUTO_BBL' in fpts.columns:
+        fpts['MAPPLUTO_BBL'] = (
+            fpts['MAPPLUTO_BBL'].pipe(gpd.pd.to_numeric, errors="coerce")
+            .dropna().astype("int64").astype(str)
+        )
+
+    gdf = fpts.merge(
+        mappluto, how='left',
+        left_on='MAPPLUTO_BBL', right_on='BBL',
+        suffixes=('_fpt','_pluto')
+    ).set_geometry('geometry_fpt', inplace=False)
+
+    # --- CRS before simplify ---
+    # If source is GeoJSON, assume 4326 when missing; otherwise fall back to 2263.
+    if gdf.crs is None:
+        if str(footprints_path).lower().endswith(('.geojson', '.json')):
+            gdf = gdf.set_crs(4326, allow_override=True)
+        else:
+            gdf = gdf.set_crs(2263, allow_override=True)
+
+    if gdf.crs.to_epsg() != 2263:
+        gdf = gdf.to_crs(2263)
+
+    # clean + simplify in feet
+    geom_col = gdf.geometry.name  # "geometry_fpt"
+    gdf = gdf[gdf[geom_col].notna() & ~gdf[geom_col].is_empty]
+    gdf[geom_col] = gdf[geom_col].simplify(5.0, preserve_topology=True)
+
+    # keep only needed props + active geometry
+    keep = [c for c in ('MAPPLUTO_BBL','LandUse','BldgClass','BBL') if c in gdf.columns]
+    gdf = gdf.loc[:, keep + [geom_col]].set_geometry(geom_col)
+
+    # standardize geometry column name to "geometry" (avoids future mismatches)
+    try:
+        gdf = gdf.rename_geometry('geometry')  # geopandas >= 0.12
+    except Exception:
+        gdf = gdf.rename(columns={geom_col: 'geometry'}).set_geometry('geometry')
+
+    # drop PLUTO geometry if still around
+    if 'geometry_pluto' in gdf.columns:
+        gdf = gdf.drop(columns=['geometry_pluto'])
+
+    return gdf
+
+
+@st.cache_resource(show_spinner=False)
+def _fp_index(_gdf: gpd.GeoDataFrame, key: str = "v1"):
+    """Build and cache the spatial index. `_gdf` is ignored for hashing; `key` controls invalidation."""
+    return _gdf.sindex
+
+def _get_lon_lat_from_marker_row(row):
+    """Robustly extract lon/lat from your marker_row or None if unavailable."""
+    if row is None:
+        return None
+    for lon_key in ["lon", "lng", "longitude", "x"]:
+        for lat_key in ["lat", "latitude", "y"]:
+            if lon_key in row and lat_key in row:
+                return float(row[lon_key]), float(row[lat_key])
+    # Try GeoSeries/geometry
+    geom = row.get("geometry") if isinstance(row, dict) else getattr(row, "geometry", None)
+    if geom is not None and geom.geom_type in ("Point",):
+        return float(geom.x), float(geom.y)
+    # Last resort: props
+    props = row.get("properties") if isinstance(row, dict) else None
+    if isinstance(props, dict) and "lon" in props and "lat" in props:
+        return float(props["lon"]), float(props["lat"])
+    return None
+
+def buildings_near_flag_geojson(FP_2263: gpd.GeoDataFrame, lon: float, lat: float, radius_ft: float = 250.0, index_key="v1") -> tuple[str, int]:
+    """Return (GeoJSON string, count) of buildings within radius_ft of (lon, lat)."""
+    # 1) point -> 2263
+    pt_2263 = gpd.GeoSeries([Point(lon, lat)], crs=4326).to_crs(2263).iloc[0]
+    buf = pt_2263.buffer(radius_ft)
+
+    # 2) spatial index candidates then precise intersects
+    sidx = _fp_index(FP_2263, key=index_key)  # FP_2263 ignored for hashing; key used
+    cand_idx = list(sidx.intersection(buf.bounds))
+    nearby = FP_2263.iloc[cand_idx]
+    nearby = nearby[nearby.intersects(buf)]
+
+    if nearby.empty:
+        return gpd.GeoDataFrame(geometry=[], crs=2263).to_crs(4326).to_json(), 0
+
+    # 3) to WGS84 + precision rounding to shrink payload
+    nearby_wgs = nearby.to_crs(4326).copy()
+    nearby_wgs["geometry"] = nearby_wgs.geometry.apply(
+        lambda g: wkb.loads(wkb.dumps(g)) if g else None
+    )
+
+    # 4) keep only light props if present
+    keep = [c for c in ("MAPPLUTO_BBL", "LandUse", "BldgClass") if c in nearby_wgs.columns]
+    nearby_wgs = nearby_wgs[keep + ["geometry"]] if keep else nearby_wgs[["geometry"]]
+    return nearby_wgs.to_json(), len(nearby_wgs)
